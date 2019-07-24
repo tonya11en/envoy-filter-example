@@ -9,7 +9,9 @@ namespace Http {
 
 HttpSampleDecoderFilterConfig::HttpSampleDecoderFilterConfig(
     const sample::Decoder& proto_config)
-    : key_(proto_config.key()), val_(proto_config.val()) {}
+    : key_(proto_config.key()), val_(proto_config.val()) {
+    
+    }
 
 HttpSampleDecoderFilter::HttpSampleDecoderFilter(HttpSampleDecoderFilterConfigSharedPtr config)
     : config_(config) {}
@@ -43,6 +45,26 @@ FilterTrailersStatus HttpSampleDecoderFilter::decodeTrailers(HeaderMap&) {
 
 void HttpSampleDecoderFilter::setDecoderFilterCallbacks(StreamDecoderFilterCallbacks& callbacks) {
   decoder_callbacks_ = &callbacks;
+}
+
+FilterHeadersStatus HttpSampleDecoderFilter::encodeHeaders(HeaderMap& headers, bool end_stream) {
+  return FilterHeadersStatus::Continue;
+}
+
+FilterDataStatus HttpSampleDecoderFilter::encodeData(Buffer::Instance& data, bool end_stream) {
+  return FilterDataStatus::Continue;
+}
+
+FilterTrailersStatus HttpSampleDecoderFilter::encodeTrailers(HeaderMap& trailers) {
+  return FilterTrailersStatus::Continue;
+}
+
+FilterMetadataStatus HttpSampleDecoderFilter::encodeMetadata(MetadataMap& metadata_map) {
+  return FilterMetadataStatus::Continue;
+}
+
+void HttpSampleDecoderFilter::setEncoderFilterCallbacks(StreamEncoderFilterCallbacks& callbacks) {
+  encoder_callbacks_ = &callbacks;
 }
 
 } // namespace Http
