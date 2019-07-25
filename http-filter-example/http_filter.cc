@@ -34,6 +34,9 @@ FilterHeadersStatus HttpSampleDecoderFilter::decodeHeaders(HeaderMap& headers, b
   // add a header
   headers.addCopy(headerKey(), headerValue());
 
+  // @tallen REMOVE
+//  return FilterHeadersStatus::Continue;
+
   if (!end_stream) {
     return FilterHeadersStatus::Continue;
   }
@@ -65,6 +68,9 @@ void HttpSampleDecoderFilter::setDecoderFilterCallbacks(StreamDecoderFilterCallb
 }
 
 FilterHeadersStatus HttpSampleDecoderFilter::encodeHeaders(HeaderMap&, bool end_stream) {
+  // @tallen REMOVE
+//  return FilterHeadersStatus::Continue;
+
   if (end_stream) {
     const std::chrono::microseconds rq_latency_ =
       std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - rq_start_time_);

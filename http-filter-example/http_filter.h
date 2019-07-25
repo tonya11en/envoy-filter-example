@@ -16,10 +16,12 @@
 namespace Envoy {
 namespace Http {
 
+typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
+
 class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
  public:
   TonyFilterSharedState() :
-    update_interval_(std::chrono::microseconds(1)),
+    update_interval_(std::chrono::milliseconds(100)),
     time_to_eval_(std::chrono::high_resolution_clock::now()),
     divisor_(1),
     target_latency_(std::chrono::microseconds(350000)),
@@ -42,13 +44,13 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
     const bool in_new_window = now > time_to_eval_;
     if (in_new_window) {
       // Determine if we should drop the next one.
+      const bool drop_occurred = !drop_mtx_.try_lock();
+      divisor_ = drop_occurred ? std::max(1, divisor_ - 1) : divisor_ + 1;
+      time_to_eval_ = now + (update_interval_ / int(divisor_));
       if (min_window_latency_ > target_latency_) {
-        const bool drop_occurred = !drop_mtx_.try_lock();
-        drop_mtx_.unlock();
         // Update the divisor accordingly.
-        divisor_ = drop_occurred ? std::max(1, divisor_ - 1) : divisor_ + 1;
+        drop_mtx_.unlock();
       }
-      time_to_eval_ = now + (update_interval_ / int(sqrt(divisor_)));
       min_window_latency_ = rq_latency;
     } else {
       min_window_latency_ = std::min(min_window_latency_, rq_latency);
@@ -58,11 +60,13 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
  private:
   std::chrono::nanoseconds update_interval_;
 
-  std::chrono::time_point<std::chrono::high_resolution_clock> time_to_eval_;
+  TimePoint time_to_eval_;
   int divisor_;
 
   std::mutex drop_mtx_;
   std::mutex update_mtx_;
+
+  std::atomic<int32_t> concurrency_;
 
   const std::chrono::nanoseconds target_latency_;
   std::chrono::nanoseconds min_window_latency_;
@@ -113,7 +117,7 @@ private:
   StreamEncoderFilterCallbacks* encoder_callbacks_;
   TonyFilterSharedStatePtr state_;
 
-  std::chrono::time_point<std::chrono::high_resolution_clock> rq_start_time_;
+  TimePoint rq_start_time_;
 
   const LowerCaseString headerKey() const;
   const std::string headerValue() const;
