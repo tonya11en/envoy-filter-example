@@ -16,69 +16,56 @@
 namespace Envoy {
 namespace Http {
 
-class TonyFilterSharedState {
+class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
  public:
   TonyFilterSharedState() :
-    update_interval_(std::chrono::microseconds(500)),
-    drop_(false),
-    time_to_eval_(std::chrono::system_clock::now() + update_interval_),
-    interval_divisor_(1),
-    avg_measured_latency_(std::chrono::microseconds(0)),
-    rq_encountered_(0),
-    target_latency_(std::chrono::microseconds(2500000)) {
+    update_interval_(std::chrono::microseconds(1)),
+    time_to_eval_(std::chrono::high_resolution_clock::now()),
+    divisor_(1),
+    target_latency_(std::chrono::microseconds(350000)),
+    min_window_latency_(target_latency_) {
   }
   ~TonyFilterSharedState() {}
 
-  bool dropEval() {
-    // This is clunky, but fine for a POC.
-    time_mtx_.lock();
-    const auto drop = drop_;
-    if (drop) {
-      drop_ = false;
-    }
-    time_mtx_.unlock();
-    return drop;
+  bool shouldDrop() {
+    // Returns true if successfully locked the mutex. This is a way to ensure
+    // there's only a single request drop per decision to drop a request.
+    return drop_mtx_.try_lock();
   }
 
-  void update(const std::chrono::microseconds& rq_latency) {
-    const auto now = std::chrono::system_clock::now();
+  void update(const std::chrono::nanoseconds& rq_latency) {
+    // Clunky hack, but fine for POC.
+    std::unique_lock<std::mutex> ul(update_mtx_);
 
-    // This is clunky, but fine for a POC.
-    time_mtx_.lock();
+    const auto now = std::chrono::high_resolution_clock::now();
 
-    const bool passed_time_window = now > time_to_eval_;
-    if (passed_time_window) {
-      drop_ = avg_measured_latency_ > target_latency_;
-
-      if (drop_) {
-        ++interval_divisor_;
-      } else {
-        interval_divisor_ = std::max(1, interval_divisor_ - 1);
+    const bool in_new_window = now > time_to_eval_;
+    if (in_new_window) {
+      // Determine if we should drop the next one.
+      if (min_window_latency_ > target_latency_) {
+        const bool drop_occurred = !drop_mtx_.try_lock();
+        drop_mtx_.unlock();
+        // Update the divisor accordingly.
+        divisor_ = drop_occurred ? std::max(1, divisor_ - 1) : divisor_ + 1;
       }
-
-      time_to_eval_ = now + update_interval_ / int(sqrt(interval_divisor_));
-      rq_encountered_ = 0;
+      time_to_eval_ = now + (update_interval_ / int(sqrt(divisor_)));
+      min_window_latency_ = rq_latency;
+    } else {
+      min_window_latency_ = std::min(min_window_latency_, rq_latency);
     }
-
-    ++rq_encountered_;
-    avg_measured_latency_ = ((avg_measured_latency_ * (rq_encountered_ - 1)) + rq_latency) / (rq_encountered_);
-    time_mtx_.unlock();
-
-//    ENVOY_LOG(info, "@tallen avg measured latency {}", avg_measured_latency_.count());
   }
 
  private:
-  std::chrono::microseconds update_interval_;
-  bool drop_;
+  std::chrono::nanoseconds update_interval_;
 
-  std::chrono::time_point<std::chrono::system_clock> time_to_eval_;
-  int interval_divisor_;
-  std::mutex time_mtx_;
+  std::chrono::time_point<std::chrono::high_resolution_clock> time_to_eval_;
+  int divisor_;
 
-  std::chrono::microseconds avg_measured_latency_;
-  int rq_encountered_;
+  std::mutex drop_mtx_;
+  std::mutex update_mtx_;
 
-  const std::chrono::microseconds target_latency_;
+  const std::chrono::nanoseconds target_latency_;
+  std::chrono::nanoseconds min_window_latency_;
 };
 typedef std::shared_ptr<TonyFilterSharedState> TonyFilterSharedStatePtr;
 
@@ -126,7 +113,7 @@ private:
   StreamEncoderFilterCallbacks* encoder_callbacks_;
   TonyFilterSharedStatePtr state_;
 
-  std::chrono::time_point<std::chrono::system_clock> rq_start_time_;
+  std::chrono::time_point<std::chrono::high_resolution_clock> rq_start_time_;
 
   const LowerCaseString headerKey() const;
   const std::string headerValue() const;

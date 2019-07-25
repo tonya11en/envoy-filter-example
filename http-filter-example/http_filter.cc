@@ -34,14 +34,19 @@ FilterHeadersStatus HttpSampleDecoderFilter::decodeHeaders(HeaderMap& headers, b
   // add a header
   headers.addCopy(headerKey(), headerValue());
 
-  if (state_->dropEval()) {
-    ENVOY_LOG(info, "@tallen stopping iteration");
-    return FilterHeadersStatus::StopAllIterationAndWatermark;
+  if (!end_stream) {
+    return FilterHeadersStatus::Continue;
   }
 
-  if (end_stream) {
-    rq_start_time_ = std::chrono::system_clock::now();
-    ENVOY_LOG(info, "@tallen set rq start time {}", rq_start_time_.time_since_epoch().count());
+  rq_start_time_ = std::chrono::high_resolution_clock::now();
+  ENVOY_LOG(info, "@tallen set rq start time {}", rq_start_time_.time_since_epoch().count());
+
+  if (state_->shouldDrop()) {
+    ENVOY_LOG(info, "@tallen ========== DROPPING ==========");
+    decoder_callbacks_->sendLocalReply(
+      Http::Code::ServiceUnavailable, "filler words", nullptr,
+      absl::nullopt, "more filler words");
+    return Http::FilterHeadersStatus::StopIteration;
   }
 
   return FilterHeadersStatus::Continue;
@@ -62,7 +67,7 @@ void HttpSampleDecoderFilter::setDecoderFilterCallbacks(StreamDecoderFilterCallb
 FilterHeadersStatus HttpSampleDecoderFilter::encodeHeaders(HeaderMap&, bool end_stream) {
   if (end_stream) {
     const std::chrono::microseconds rq_latency_ =
-      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - rq_start_time_);
+      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - rq_start_time_);
     ENVOY_LOG(info, "@tallen measured rq latency {}", rq_latency_.count());
     state_->update(rq_latency_);
   }
