@@ -1,7 +1,9 @@
 #include <string>
+#include <iostream>
 
 #include "http_filter.h"
 
+#include "common/common/logger.h"
 #include "envoy/server/filter_config.h"
 
 namespace Envoy {
@@ -13,8 +15,8 @@ HttpSampleDecoderFilterConfig::HttpSampleDecoderFilterConfig(
     
     }
 
-HttpSampleDecoderFilter::HttpSampleDecoderFilter(HttpSampleDecoderFilterConfigSharedPtr config)
-    : config_(config) {}
+HttpSampleDecoderFilter::HttpSampleDecoderFilter(HttpSampleDecoderFilterConfigSharedPtr config, TonyFilterSharedStatePtr shared_state)
+  : config_(config), state_(shared_state) {} 
 
 HttpSampleDecoderFilter::~HttpSampleDecoderFilter() {}
 
@@ -28,9 +30,19 @@ const std::string HttpSampleDecoderFilter::headerValue() const {
   return config_->val();
 }
 
-FilterHeadersStatus HttpSampleDecoderFilter::decodeHeaders(HeaderMap& headers, bool) {
+FilterHeadersStatus HttpSampleDecoderFilter::decodeHeaders(HeaderMap& headers, bool end_stream) {
   // add a header
   headers.addCopy(headerKey(), headerValue());
+
+  if (state_->dropEval()) {
+    ENVOY_LOG(info, "@tallen stopping iteration");
+    return FilterHeadersStatus::StopAllIterationAndWatermark;
+  }
+
+  if (end_stream) {
+    rq_start_time_ = std::chrono::system_clock::now();
+    ENVOY_LOG(info, "@tallen set rq start time {}", rq_start_time_.time_since_epoch().count());
+  }
 
   return FilterHeadersStatus::Continue;
 }
@@ -47,19 +59,26 @@ void HttpSampleDecoderFilter::setDecoderFilterCallbacks(StreamDecoderFilterCallb
   decoder_callbacks_ = &callbacks;
 }
 
-FilterHeadersStatus HttpSampleDecoderFilter::encodeHeaders(HeaderMap& headers, bool end_stream) {
+FilterHeadersStatus HttpSampleDecoderFilter::encodeHeaders(HeaderMap&, bool end_stream) {
+  if (end_stream) {
+    const std::chrono::microseconds rq_latency_ =
+      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - rq_start_time_);
+    ENVOY_LOG(info, "@tallen measured rq latency {}", rq_latency_.count());
+    state_->update(rq_latency_);
+  }
+
   return FilterHeadersStatus::Continue;
 }
 
-FilterDataStatus HttpSampleDecoderFilter::encodeData(Buffer::Instance& data, bool end_stream) {
+FilterDataStatus HttpSampleDecoderFilter::encodeData(Buffer::Instance&, bool) {
   return FilterDataStatus::Continue;
 }
 
-FilterTrailersStatus HttpSampleDecoderFilter::encodeTrailers(HeaderMap& trailers) {
+FilterTrailersStatus HttpSampleDecoderFilter::encodeTrailers(HeaderMap&) {
   return FilterTrailersStatus::Continue;
 }
 
-FilterMetadataStatus HttpSampleDecoderFilter::encodeMetadata(MetadataMap& metadata_map) {
+FilterMetadataStatus HttpSampleDecoderFilter::encodeMetadata(MetadataMap&) {
   return FilterMetadataStatus::Continue;
 }
 

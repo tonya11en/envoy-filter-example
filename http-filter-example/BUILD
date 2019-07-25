@@ -31,6 +31,7 @@ envoy_cc_library(
     deps = [
         ":http_filter_proto_cc",
         "@envoy//source/exe:envoy_common_lib",
+        "@envoy//source/common/common:minimal_logger_lib",
     ],
 )
 

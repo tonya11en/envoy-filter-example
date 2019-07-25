@@ -46,9 +46,12 @@ private:
         std::make_shared<Http::HttpSampleDecoderFilterConfig>(
             Http::HttpSampleDecoderFilterConfig(proto_config));
 
-    return [config](Http::FilterChainFactoryCallbacks& callbacks) -> void {
-      auto filter = new Http::HttpSampleDecoderFilter(config);
-      callbacks.addStreamDecoderFilter(Http::StreamDecoderFilterSharedPtr{filter});
+    auto state = new Http::TonyFilterSharedState();
+    Http::TonyFilterSharedStatePtr shared_state{state};
+
+    return [config, shared_state](Http::FilterChainFactoryCallbacks& callbacks) -> void {
+      auto filter = std::make_shared<Http::HttpSampleDecoderFilter>(config, shared_state);
+      callbacks.addStreamFilter(filter);
     };
   }
 
