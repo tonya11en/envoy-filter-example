@@ -28,7 +28,7 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
     window_sample_count_(0),
     in_flight_count_(0),
     concurrency_(1),
-    time_window_(std::chrono::milliseconds(100),
+    time_window_(std::chrono::milliseconds(100)),
     shutdown_(false) {
 
       sample_reset_thread_ =
