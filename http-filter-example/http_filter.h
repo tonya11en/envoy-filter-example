@@ -2,6 +2,7 @@
 
 #include <string>
 #include <iostream>
+#include <future>
 #include <algorithm>
 #include <mutex>
 #include <thread>
@@ -21,55 +22,57 @@ typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
 class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
  public:
   TonyFilterSharedState() :
-    update_interval_(std::chrono::milliseconds(100)),
-    time_to_eval_(std::chrono::high_resolution_clock::now()),
-    divisor_(1),
-    target_latency_(std::chrono::microseconds(350000)),
-    min_window_latency_(target_latency_) {
-  }
-  ~TonyFilterSharedState() {}
+    min_rtt_(std::chrono::milliseconds(225)),
+    sample_rtt_(min_rtt_),
+    allowed_queue_(2), // Q
+    window_sample_count_(0),
+    in_flight_count_(0),
+    concurrency_(1),
+    time_window_(std::chrono::milliseconds(100),
+    shutdown_(false) {
 
-  bool shouldDrop() {
-    // Returns true if successfully locked the mutex. This is a way to ensure
-    // there's only a single request drop per decision to drop a request.
-    return drop_mtx_.try_lock();
-  }
-
-  void update(const std::chrono::nanoseconds& rq_latency) {
-    // Clunky hack, but fine for POC.
-    std::unique_lock<std::mutex> ul(update_mtx_);
-
-    const auto now = std::chrono::high_resolution_clock::now();
-
-    const bool in_new_window = now > time_to_eval_;
-    if (in_new_window) {
-      // Determine if we should drop the next one.
-      const bool drop_occurred = !drop_mtx_.try_lock();
-      divisor_ = drop_occurred ? std::max(1, divisor_ - 1) : divisor_ + 1;
-      time_to_eval_ = now + (update_interval_ / int(divisor_));
-      if (min_window_latency_ > target_latency_) {
-        // Update the divisor accordingly.
-        drop_mtx_.unlock();
-      }
-      min_window_latency_ = rq_latency;
-    } else {
-      min_window_latency_ = std::min(min_window_latency_, rq_latency);
+      sample_reset_thread_ =
+        std::async(TonyFilterSharedState::asyncResetSamples, sample_mtx_, window_sample_count_, running_avg_rtt_, sample_rtt, allowed_queue_);
     }
+
+  ~TonyFilterSharedState() {
+    shutdown_.store(true);
+
+    // Wait for return.
+    sample_reset_thread.get();
   }
+
+  // Returns true if request has been allowed through. If let through, the
+  // in-flight request count is incremented.
+  bool letThrough();
+
+  // Takes a latency sample of a completed request.
+  void sample(const std::chrono::nanoseconds& rq_latency);
+
+  // Indicates that a request has been completed, decrementing the in-flight
+  // request count.
+  void finish();
 
  private:
-  std::chrono::nanoseconds update_interval_;
+  static void asyncResetSamples(std::mutex sample_mtx, int& window_sample_count, std::chrono::nanoseconds& running_avg_rtt_, std::chrono::nanoseconds sample_rtt, std::atomic<int> concurrency);
 
-  TimePoint time_to_eval_;
-  int divisor_;
+  std::chrono::nanoseconds min_rtt_;
+  std::atomic<std::chrono::nanoseconds> sample_rtt_;
+  int allowed_queue_;
 
-  std::mutex drop_mtx_;
-  std::mutex update_mtx_;
+  std::chrono::nanoseconds running_avg_rtt_;
+  int window_sample_count_;
+  std::mutex sample_mtx_;
 
-  std::atomic<int32_t> concurrency_;
+  int in_flight_count_;
+  std::atomic<int> concurrency_;
+  std::mutex counter_mtx_;
 
-  const std::chrono::nanoseconds target_latency_;
-  std::chrono::nanoseconds min_window_latency_;
+  std::chrono::milliseconds time_window_;
+
+  // The periodic sample calculation will halt if this is true.
+  std::atomic<bool> shutdown_;
+  std::future<void> sample_reset_thread_;
 };
 typedef std::shared_ptr<TonyFilterSharedState> TonyFilterSharedStatePtr;
 
