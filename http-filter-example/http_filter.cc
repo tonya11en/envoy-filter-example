@@ -1,5 +1,7 @@
 #include <string>
 #include <iostream>
+#include <future>
+#include <algorithm>
 
 #include "http_filter.h"
 
@@ -113,26 +115,26 @@ void TonyFilterSharedState::finish() {
   in_flight_count_--;
 }
 
-void asyncResetSamples(std::atomic<bool> shutdown, std::mutex sample_mtx, int& window_sample_count, std::chrono::nanoseconds& running_avg_rtt, std::chrono::nanoseconds sample_rtt, std::atomic<int> concurrency, const int allowed_queue) {
-  while (!shutdown.load()) {
+void TonyFilterSharedState::resetSampleWorkerJob() {
+  while (!shutdown_.load()) {
     std::this_thread::sleep_for(time_window_);
     std::unique_lock<std::mutex> ul(sample_mtx_);
-    if (window_sample_count == 0) {
+    if (window_sample_count_ == 0) {
       continue;
     }
 
-    sample_rtt = running_avg_rtt;
+    sample_rtt_ = running_avg_rtt_;
 
     // Gradient. TODO verify math.
     const double gradient =
-      min(2.0, (double(min_rtt_.count()) / sample_rtt.count()));
-    const int limit = concurrency.load() * gradient + allowed_queue;
-    concurrency.store(limit);
+      std::min(2.0, (double(min_rtt_.count()) / sample_rtt_.count()));
+    const int limit = concurrency_.load() * gradient + allowed_queue_;
+    concurrency_.store(std::max(1, std::min(limit, max_limit_)));
 
-    ENVOY_LOG(info, "setting new concurrency limit: {}", concurrency.load());
+    ENVOY_LOG(info, "setting new concurrency limit: {}", concurrency_.load());
 
-    running_avg_rtt = std::chrono::nanoseconds(0);
-    window_sample_count = 0;
+    running_avg_rtt_ = std::chrono::nanoseconds(0);
+    window_sample_count_ = 0;
   }
 }
 

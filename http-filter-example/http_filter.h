@@ -24,22 +24,21 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
   TonyFilterSharedState() :
     min_rtt_(std::chrono::milliseconds(225)),
     sample_rtt_(min_rtt_),
-    allowed_queue_(2), // Q
+    allowed_queue_(5), // Q
+    max_limit_(1000),
     window_sample_count_(0),
     in_flight_count_(0),
     concurrency_(1),
     time_window_(std::chrono::milliseconds(100)),
     shutdown_(false) {
-
-      sample_reset_thread_ =
-        std::async(TonyFilterSharedState::asyncResetSamples, sample_mtx_, window_sample_count_, running_avg_rtt_, sample_rtt, allowed_queue_);
+      sample_reset_thread_ = std::thread(&TonyFilterSharedState::resetSampleWorkerJob, this);
     }
 
   ~TonyFilterSharedState() {
     shutdown_.store(true);
 
     // Wait for return.
-    sample_reset_thread.get();
+    sample_reset_thread_.join();
   }
 
   // Returns true if request has been allowed through. If let through, the
@@ -53,12 +52,14 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
   // request count.
   void finish();
 
+  void resetSampleWorkerJob();
+
  private:
-  static void asyncResetSamples(std::mutex sample_mtx, int& window_sample_count, std::chrono::nanoseconds& running_avg_rtt_, std::chrono::nanoseconds sample_rtt, std::atomic<int> concurrency);
 
   std::chrono::nanoseconds min_rtt_;
-  std::atomic<std::chrono::nanoseconds> sample_rtt_;
+  std::chrono::nanoseconds sample_rtt_;
   int allowed_queue_;
+  int max_limit_;
 
   std::chrono::nanoseconds running_avg_rtt_;
   int window_sample_count_;
@@ -72,7 +73,7 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
 
   // The periodic sample calculation will halt if this is true.
   std::atomic<bool> shutdown_;
-  std::future<void> sample_reset_thread_;
+  std::thread sample_reset_thread_;
 };
 typedef std::shared_ptr<TonyFilterSharedState> TonyFilterSharedStatePtr;
 
