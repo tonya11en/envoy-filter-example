@@ -23,16 +23,17 @@ typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
 class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
  public:
   TonyFilterSharedState() :
-    min_rtt_(std::chrono::milliseconds(7)),
-    sample_rtt_(min_rtt_),
     allowed_queue_(8), // Q
     max_limit_(1000),
     window_sample_count_(0),
     in_flight_count_(0),
-    concurrency_(25),
+    concurrency_(1),
     time_window_(std::chrono::milliseconds(100)),
-    shutdown_(false) {
+    shutdown_(false),
+    calculating_min_rtt_(true),
+    min_rtt_calculation_window_(std::chrono::seconds(5)) {
       sample_reset_thread_ = std::thread(&TonyFilterSharedState::resetSampleWorkerJob, this);
+      min_rtt_calculator_thread_ = std::thread(&TonyFilterSharedState::minRTTCalculator, this);
     }
 
   ~TonyFilterSharedState() {
@@ -40,6 +41,7 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
 
     // Wait for return.
     sample_reset_thread_.join();
+//    min_rtt_calculator_thread_.join();
   }
 
   // Returns true if request has been allowed through. If let through, the
@@ -50,11 +52,17 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
   // count.
   void sample(const std::chrono::nanoseconds& rq_latency);
 
+  void sampleMinRTT(const std::chrono::nanoseconds& rq_latency);
+
+  void minRTTCalculator();
+
   // Updates the running sample via average or p50/p95/p99.
   std::chrono::microseconds getRunningSample();
   uint32_t latencySamplePercentile(std::vector<uint32_t>& latency_samples, const int percentile);
 
   void resetSampleWorkerJob();
+
+
 
  private:
   std::vector<uint32_t> latency_samples_;
@@ -74,9 +82,13 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
 
   std::chrono::milliseconds time_window_;
 
-  // The periodic sample calculation will halt if this is true.
+  // The background threads will halt if this is true.
   std::atomic<bool> shutdown_;
   std::thread sample_reset_thread_;
+
+  std::atomic<bool> calculating_min_rtt_;
+  std::thread min_rtt_calculator_thread_;
+  std::chrono::seconds min_rtt_calculation_window_;
 };
 typedef std::shared_ptr<TonyFilterSharedState> TonyFilterSharedStatePtr;
 

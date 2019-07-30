@@ -68,7 +68,8 @@ void HttpSampleDecoderFilter::setDecoderFilterCallbacks(StreamDecoderFilterCallb
 FilterHeadersStatus HttpSampleDecoderFilter::encodeHeaders(HeaderMap&, bool end_stream) {
   if (end_stream) {
     const std::chrono::microseconds rq_latency_ =
-      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - rq_start_time_);
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::high_resolution_clock::now() - rq_start_time_);
     state_->sample(rq_latency_);
   }
 
@@ -107,10 +108,31 @@ uint32_t TonyFilterSharedState::latencySamplePercentile(std::vector<uint32_t>& l
   return latency_samples[index];
 }
 
+void TonyFilterSharedState::minRTTCalculator() {
+  while (!shutdown_.load()) {
+    calculating_min_rtt_.store(true);
+    latency_samples_.clear();
+    concurrency_.store(1);
+    
+    // TODO: make this RTT gathering time configurable. Do it per-request.
+    while (latency_samples_.size() < 50) {
+      ENVOY_LOG(info, "@tallen waiting for latency sample at {}", latency_samples_.size());
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    min_rtt_ = getRunningSample();
+    calculating_min_rtt_.store(false);
+      ENVOY_LOG(info, "@tallen got min rtt val of {}", min_rtt_.count());
+
+    ENVOY_LOG(info, "@tallen sleeping for {} secs", min_rtt_calculation_window_.count());
+    std::this_thread::sleep_for(min_rtt_calculation_window_);
+    ENVOY_LOG(info, "@tallen done sleeping");
+  }
+}
+
 std::chrono::microseconds TonyFilterSharedState::getRunningSample() {
   // Average. TODO: just take average of the latency samples.
 #if 0
-
   running_sample_rtt_ =
     (running_sample_rtt_ * (window_sample_count_ - 1) + rq_latency) / window_sample_count_;
 #endif
@@ -127,6 +149,11 @@ std::chrono::microseconds TonyFilterSharedState::getRunningSample() {
 }
 
 void TonyFilterSharedState::sample(const std::chrono::nanoseconds& rq_latency) {
+  if (calculating_min_rtt_.load()) {
+    sampleMinRTT(rq_latency);
+    return;
+  }
+
   std::unique_lock<std::mutex> ul(sample_mtx_); 
   const uint32_t usec_count =
     std::chrono::duration_cast<std::chrono::microseconds>(rq_latency).count();
@@ -135,11 +162,22 @@ void TonyFilterSharedState::sample(const std::chrono::nanoseconds& rq_latency) {
   in_flight_count_--;
 }
 
+void TonyFilterSharedState::sampleMinRTT(const std::chrono::nanoseconds& rq_latency) {
+  ENVOY_LOG(info, "@tallen min rtt sample grabbing mutex");
+  std::unique_lock<std::mutex> ul(sample_mtx_); 
+  ENVOY_LOG(info, "@tallen min rtt sample got mutex");
+  const uint32_t usec_count =
+    std::chrono::duration_cast<std::chrono::microseconds>(rq_latency).count();
+  latency_samples_.emplace_back(usec_count);
+  ENVOY_LOG(info, "@tallen added min rtt sample to vector");
+  in_flight_count_--;
+}
+
 void TonyFilterSharedState::resetSampleWorkerJob() {
   while (!shutdown_.load()) {
     std::this_thread::sleep_for(time_window_);
 
-    if (window_sample_count_.load() == 0) {
+    if (window_sample_count_.load() == 0 || calculating_min_rtt_.load()) {
       continue;
     }
 
