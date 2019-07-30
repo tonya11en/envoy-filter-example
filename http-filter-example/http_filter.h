@@ -1,13 +1,14 @@
 #pragma once
 
-#include <string>
-#include <iostream>
-#include <future>
 #include <algorithm>
-#include <mutex>
-#include <thread>
 #include <cmath>
+#include <future>
+#include <iostream>
+#include <mutex>
 #include <shared_mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 #include "envoy/server/filter_config.h"
 #include "common/common/logger.h"
@@ -22,13 +23,13 @@ typedef std::chrono::time_point<std::chrono::high_resolution_clock> TimePoint;
 class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
  public:
   TonyFilterSharedState() :
-    min_rtt_(std::chrono::milliseconds(225)),
+    min_rtt_(std::chrono::milliseconds(7)),
     sample_rtt_(min_rtt_),
-    allowed_queue_(5), // Q
+    allowed_queue_(8), // Q
     max_limit_(1000),
     window_sample_count_(0),
     in_flight_count_(0),
-    concurrency_(1),
+    concurrency_(25),
     time_window_(std::chrono::milliseconds(100)),
     shutdown_(false) {
       sample_reset_thread_ = std::thread(&TonyFilterSharedState::resetSampleWorkerJob, this);
@@ -45,24 +46,26 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
   // in-flight request count is incremented.
   bool letThrough();
 
-  // Takes a latency sample of a completed request.
+  // Takes a latency sample of a completed request and decrements the in-flight
+  // count.
   void sample(const std::chrono::nanoseconds& rq_latency);
 
-  // Indicates that a request has been completed, decrementing the in-flight
-  // request count.
-  void finish();
+  // Updates the running sample via average or p50/p95/p99.
+  std::chrono::microseconds getRunningSample();
+  uint32_t latencySamplePercentile(std::vector<uint32_t>& latency_samples, const int percentile);
 
   void resetSampleWorkerJob();
 
  private:
+  std::vector<uint32_t> latency_samples_;
 
   std::chrono::nanoseconds min_rtt_;
   std::chrono::nanoseconds sample_rtt_;
   int allowed_queue_;
   int max_limit_;
 
-  std::chrono::nanoseconds running_avg_rtt_;
-  int window_sample_count_;
+  std::chrono::nanoseconds running_sample_rtt_;
+  std::atomic<int> window_sample_count_;
   std::mutex sample_mtx_;
 
   int in_flight_count_;

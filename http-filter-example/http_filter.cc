@@ -1,7 +1,8 @@
-#include <string>
-#include <iostream>
-#include <future>
 #include <algorithm>
+#include <future>
+#include <iostream>
+#include <string>
+#include <vector>
 
 #include "http_filter.h"
 
@@ -41,13 +42,11 @@ FilterHeadersStatus HttpSampleDecoderFilter::decodeHeaders(HeaderMap& headers, b
   }
 
   rq_start_time_ = std::chrono::high_resolution_clock::now();
-  ENVOY_LOG(info, "@tallen set rq start time {}", rq_start_time_.time_since_epoch().count());
 
   if (state_->letThrough()) {
     return FilterHeadersStatus::Continue;
   }
 
-  ENVOY_LOG(info, "@tallen ========== DROPPING ==========");
   decoder_callbacks_->sendLocalReply(
     Http::Code::ServiceUnavailable, "filler words", nullptr,
     absl::nullopt, "more filler words");
@@ -70,9 +69,7 @@ FilterHeadersStatus HttpSampleDecoderFilter::encodeHeaders(HeaderMap&, bool end_
   if (end_stream) {
     const std::chrono::microseconds rq_latency_ =
       std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - rq_start_time_);
-    ENVOY_LOG(info, "@tallen measured rq latency {}", rq_latency_.count());
     state_->sample(rq_latency_);
-    state_->finish();
   }
 
   return FilterHeadersStatus::Continue;
@@ -103,27 +100,57 @@ bool TonyFilterSharedState::letThrough() {
   return false;
 }
 
-void TonyFilterSharedState::sample(const std::chrono::nanoseconds& rq_latency) {
-  std::unique_lock<std::mutex> ul(sample_mtx_); 
-  ++window_sample_count_;
-  running_avg_rtt_ =
-    (running_avg_rtt_ * (window_sample_count_ - 1) + rq_latency) / window_sample_count_;
+uint32_t TonyFilterSharedState::latencySamplePercentile(std::vector<uint32_t>& latency_samples, const int percentile) {
+  // TODO perf: use quickselect or something instead of sorting.
+  std::sort(latency_samples.begin(), latency_samples.end());
+  const int index = latency_samples.size() * (percentile / 100.0);
+  return latency_samples[index];
 }
 
-void TonyFilterSharedState::finish() {
-  std::unique_lock<std::mutex> ul(counter_mtx_);
+std::chrono::microseconds TonyFilterSharedState::getRunningSample() {
+  // Average. TODO: just take average of the latency samples.
+#if 0
+
+  running_sample_rtt_ =
+    (running_sample_rtt_ * (window_sample_count_ - 1) + rq_latency) / window_sample_count_;
+#endif
+
+  // @tallen get the top kth latency here before locking.
+  std::vector<uint32_t> latency_samples;
+  {
+    std::unique_lock<std::mutex> ul(sample_mtx_);
+    latency_samples.reserve(latency_samples_.size());
+    std::swap(latency_samples_, latency_samples);
+  }
+
+  return std::chrono::microseconds(latencySamplePercentile(latency_samples, 50));
+}
+
+void TonyFilterSharedState::sample(const std::chrono::nanoseconds& rq_latency) {
+  std::unique_lock<std::mutex> ul(sample_mtx_); 
+  const uint32_t usec_count =
+    std::chrono::duration_cast<std::chrono::microseconds>(rq_latency).count();
+  latency_samples_.emplace_back(usec_count);
+  window_sample_count_++;
   in_flight_count_--;
 }
 
 void TonyFilterSharedState::resetSampleWorkerJob() {
   while (!shutdown_.load()) {
     std::this_thread::sleep_for(time_window_);
-    std::unique_lock<std::mutex> ul(sample_mtx_);
-    if (window_sample_count_ == 0) {
+
+    if (window_sample_count_.load() == 0) {
       continue;
     }
 
-    sample_rtt_ = running_avg_rtt_;
+    const auto running_sample = getRunningSample();
+
+    std::unique_lock<std::mutex> ul(sample_mtx_);
+    ENVOY_LOG(info, "@tallen window sample count: {}", window_sample_count_);
+
+    sample_rtt_ = std::chrono::duration_cast<std::chrono::nanoseconds>(running_sample);
+    ENVOY_LOG(info, "@tallen min rtt: {}", min_rtt_.count());
+    ENVOY_LOG(info, "@tallen sample rtt: {}", sample_rtt_.count());
 
     // Gradient. TODO verify math.
     const double gradient =
@@ -131,9 +158,11 @@ void TonyFilterSharedState::resetSampleWorkerJob() {
     const int limit = concurrency_.load() * gradient + allowed_queue_;
     concurrency_.store(std::max(1, std::min(limit, max_limit_)));
 
+    ENVOY_LOG(info, "@tallen gradient: {}", gradient);
+    ENVOY_LOG(info, "@tallen limit: {}", limit);
+
     ENVOY_LOG(info, "setting new concurrency limit: {}", concurrency_.load());
 
-    running_avg_rtt_ = std::chrono::nanoseconds(0);
     window_sample_count_ = 0;
   }
 }
