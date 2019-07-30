@@ -64,7 +64,7 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
   int allowed_queue_;
   int max_limit_;
 
-  std::chrono::nanoseconds running_sample_rtt_;
+//  std::chrono::nanoseconds running_sample_rtt_;
   std::atomic<int> window_sample_count_;
   std::mutex sample_mtx_;
 
