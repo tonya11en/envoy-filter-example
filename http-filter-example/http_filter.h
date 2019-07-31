@@ -39,7 +39,7 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
 
     // Wait for return.
     sample_reset_thread_.join();
-//    min_rtt_calculator_thread_.join();
+    min_rtt_calculator_thread_.join();
   }
 
   // Returns true if request has been allowed through. If let through, the
