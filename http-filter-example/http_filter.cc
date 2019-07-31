@@ -93,7 +93,7 @@ void HttpSampleDecoderFilter::setEncoderFilterCallbacks(StreamEncoderFilterCallb
 }
 
 bool TonyFilterSharedState::letThrough() {
-  std::unique_lock<std::mutex> ul(counter_mtx_);
+  std::unique_lock<std::mutex> ul(sample_mtx_); 
   if (in_flight_count_ < concurrency_.load()) {
     ++in_flight_count_;
     return true;
