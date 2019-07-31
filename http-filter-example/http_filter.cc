@@ -110,35 +110,39 @@ uint32_t TonyFilterSharedState::latencySamplePercentile(std::vector<uint32_t>& l
 
 void TonyFilterSharedState::minRTTCalculator() {
   while (!shutdown_.load()) {
-    calculating_min_rtt_.store(true);
-    latency_samples_.clear();
-    concurrency_.store(1);
-    
-    // TODO: make this RTT gathering time configurable. Do it per-request.
-    while (latency_samples_.size() < 50) {
-      ENVOY_LOG(info, "@tallen waiting for latency sample at {}", latency_samples_.size());
-      std::this_thread::sleep_for(std::chrono::seconds(1));
+    {
+      absl::WriterMutexLock wml(&min_rtt_calc_mtx_);
+
+      {
+        std::unique_lock<std::mutex> sample_ul(sample_mtx_); 
+        latency_samples_.clear();
+      }
+
+      concurrency_.store(1);
+
+      // TODO: make this RTT gathering time configurable. Do it per-request.
+      auto vec_size = latency_samples_.size();
+      while (vec_size < 50) {
+        ENVOY_LOG(info, "@tallen waiting for latency sample at {}", vec_size);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        vec_size = latency_samples_.size();
+      }
+
+      min_rtt_ = getRunningSample();
+      ENVOY_LOG(info, "@tallen got min rtt val of {}", min_rtt_.count());
+      ENVOY_LOG(info, "@tallen sleeping for {} secs", min_rtt_calculation_window_.count());
     }
 
-    min_rtt_ = getRunningSample();
-    calculating_min_rtt_.store(false);
-      ENVOY_LOG(info, "@tallen got min rtt val of {}", min_rtt_.count());
-
-    ENVOY_LOG(info, "@tallen sleeping for {} secs", min_rtt_calculation_window_.count());
     std::this_thread::sleep_for(min_rtt_calculation_window_);
+
     ENVOY_LOG(info, "@tallen done sleeping");
   }
 }
 
 std::chrono::microseconds TonyFilterSharedState::getRunningSample() {
-  // Average. TODO: just take average of the latency samples.
-#if 0
-  running_sample_rtt_ =
-    (running_sample_rtt_ * (window_sample_count_ - 1) + rq_latency) / window_sample_count_;
-#endif
-
   // @tallen get the top kth latency here before locking.
   std::vector<uint32_t> latency_samples;
+
   {
     std::unique_lock<std::mutex> ul(sample_mtx_);
     latency_samples.reserve(latency_samples_.size());
@@ -149,7 +153,7 @@ std::chrono::microseconds TonyFilterSharedState::getRunningSample() {
 }
 
 void TonyFilterSharedState::sample(const std::chrono::nanoseconds& rq_latency) {
-  if (calculating_min_rtt_.load()) {
+  if (!min_rtt_calc_mtx_.ReaderTryLock()) {
     sampleMinRTT(rq_latency);
     return;
   }
@@ -160,6 +164,8 @@ void TonyFilterSharedState::sample(const std::chrono::nanoseconds& rq_latency) {
   latency_samples_.emplace_back(usec_count);
   window_sample_count_++;
   in_flight_count_--;
+
+  min_rtt_calc_mtx_.ReaderUnlock();
 }
 
 void TonyFilterSharedState::sampleMinRTT(const std::chrono::nanoseconds& rq_latency) {
@@ -177,9 +183,11 @@ void TonyFilterSharedState::resetSampleWorkerJob() {
   while (!shutdown_.load()) {
     std::this_thread::sleep_for(time_window_);
 
-    if (window_sample_count_.load() == 0 || calculating_min_rtt_.load()) {
+    if (window_sample_count_.load() == 0) {
       continue;
     }
+
+    absl::ReaderMutexLock rml(&min_rtt_calc_mtx_);
 
     const auto running_sample = getRunningSample();
 

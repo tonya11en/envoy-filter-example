@@ -5,7 +5,6 @@
 #include <future>
 #include <iostream>
 #include <mutex>
-#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,8 +29,7 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
     concurrency_(1),
     time_window_(std::chrono::milliseconds(100)),
     shutdown_(false),
-    calculating_min_rtt_(true),
-    min_rtt_calculation_window_(std::chrono::seconds(5)) {
+    min_rtt_calculation_window_(std::chrono::seconds(30)) {
       sample_reset_thread_ = std::thread(&TonyFilterSharedState::resetSampleWorkerJob, this);
       min_rtt_calculator_thread_ = std::thread(&TonyFilterSharedState::minRTTCalculator, this);
     }
@@ -74,11 +72,11 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
 
 //  std::chrono::nanoseconds running_sample_rtt_;
   std::atomic<int> window_sample_count_;
-  std::mutex sample_mtx_;
+  mutable std::mutex sample_mtx_;
 
   int in_flight_count_;
   std::atomic<int> concurrency_;
-  std::mutex counter_mtx_;
+  mutable std::mutex counter_mtx_;
 
   std::chrono::milliseconds time_window_;
 
@@ -86,7 +84,7 @@ class TonyFilterSharedState : public Logger::Loggable<Logger::Id::filter> {
   std::atomic<bool> shutdown_;
   std::thread sample_reset_thread_;
 
-  std::atomic<bool> calculating_min_rtt_;
+  mutable absl::Mutex min_rtt_calc_mtx_;
   std::thread min_rtt_calculator_thread_;
   std::chrono::seconds min_rtt_calculation_window_;
 };
