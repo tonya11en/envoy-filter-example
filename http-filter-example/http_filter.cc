@@ -121,11 +121,9 @@ void TonyFilterSharedState::minRTTCalculator() {
       concurrency_.store(1);
 
       // TODO: make this RTT gathering time configurable. Do it per-request.
-      auto vec_size = latency_samples_.size();
-      while (vec_size < 50) {
-        ENVOY_LOG(info, "@tallen waiting for latency sample at {}", vec_size);
+      while (window_sample_count_.load() < 50 && !shutdown_.load()) {
+        ENVOY_LOG(info, "@tallen waiting for latency sample at {}", window_sample_count_.load());
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        vec_size = latency_samples_.size();
       }
 
       min_rtt_ = getRunningSample();
@@ -158,23 +156,24 @@ void TonyFilterSharedState::sample(const std::chrono::nanoseconds& rq_latency) {
     return;
   }
 
-  std::unique_lock<std::mutex> ul(sample_mtx_); 
-  const uint32_t usec_count =
-    std::chrono::duration_cast<std::chrono::microseconds>(rq_latency).count();
-  latency_samples_.emplace_back(usec_count);
-  window_sample_count_++;
-  in_flight_count_--;
+  {
+    std::unique_lock<std::mutex> ul(sample_mtx_); 
+    const uint32_t usec_count =
+      std::chrono::duration_cast<std::chrono::microseconds>(rq_latency).count();
+    latency_samples_.emplace_back(usec_count);
+    window_sample_count_++;
+    in_flight_count_--;
+  }
 
   min_rtt_calc_mtx_.ReaderUnlock();
 }
 
 void TonyFilterSharedState::sampleMinRTT(const std::chrono::nanoseconds& rq_latency) {
-  ENVOY_LOG(info, "@tallen min rtt sample grabbing mutex");
   std::unique_lock<std::mutex> ul(sample_mtx_); 
-  ENVOY_LOG(info, "@tallen min rtt sample got mutex");
   const uint32_t usec_count =
     std::chrono::duration_cast<std::chrono::microseconds>(rq_latency).count();
   latency_samples_.emplace_back(usec_count);
+  window_sample_count_++;
   ENVOY_LOG(info, "@tallen added min rtt sample to vector");
   in_flight_count_--;
 }
