@@ -7,19 +7,11 @@ load(
     "envoy_cc_test",
 )
 
-envoy_cc_binary(
-    name = "envoy",
-    repository = "@envoy",
-    deps = [
-        "//chronosphere/src/filters/network/stream_compressor:stream_compressor_config",
-        "@envoy//source/exe:envoy_main_entry_lib",
-    ],
-)
 
 envoy_cc_library(
-    name = "echo2_lib",
-    srcs = ["echo2.cc"],
-    hdrs = ["echo2.h"],
+    name = "stream_compressor_lib",
+    srcs = ["stream_compressor.cc"],
+    hdrs = ["stream_compressor.h"],
     repository = "@envoy",
     deps = [
         "@envoy//envoy/buffer:buffer_interface",
@@ -31,11 +23,11 @@ envoy_cc_library(
 )
 
 envoy_cc_library(
-    name = "echo2_config",
-    srcs = ["echo2_config.cc"],
+    name = "stream_compressor_config",
+    srcs = ["stream_compressor_config.cc"],
     repository = "@envoy",
     deps = [
-        ":echo2_lib",
+        ":stream_compressor_lib",
         "@envoy//envoy/network:filter_interface",
         "@envoy//envoy/registry:registry",
         "@envoy//envoy/server:filter_config_interface",
@@ -43,18 +35,12 @@ envoy_cc_library(
 )
 
 envoy_cc_test(
-    name = "echo2_integration_test",
-    srcs = ["echo2_integration_test.cc"],
-    data =  ["echo2_server.yaml"],
+    name = "stream_compressor_integration_test",
+    srcs = ["stream_compressor_integration_test.cc"],
+    data =  ["stream_compressor_server.yaml"],
     repository = "@envoy",
     deps = [
-        ":echo2_config",
+        ":stream_compressor_config",
         "@envoy//test/integration:integration_lib"
     ],
-)
-
-sh_test(
-    name = "envoy_binary_test",
-    srcs = ["envoy_binary_test.sh"],
-    data = [":envoy"],
 )

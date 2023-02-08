@@ -2,7 +2,7 @@ workspace(name = "envoy_filter_example")
 
 local_repository(
     name = "envoy_build_config",
-    path = "envoy_build_config",
+    path = "ext_build_cfg",
 )
 
 local_repository(
