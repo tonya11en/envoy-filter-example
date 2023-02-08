@@ -1,6 +1,11 @@
 workspace(name = "envoy_filter_example")
 
 local_repository(
+    name = "envoy_build_config",
+    path = "envoy_build_config",
+)
+
+local_repository(
     name = "envoy",
     path = "envoy",
 )
@@ -28,3 +33,5 @@ envoy_python_dependencies()
 load("@envoy//bazel:dependency_imports.bzl", "envoy_dependency_imports")
 
 envoy_dependency_imports()
+
+
