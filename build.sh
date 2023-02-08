@@ -11,8 +11,7 @@ function do_build {
   echo "Starting envoy binary build and backing up previous binary..."
   mv ${BIN_DIR}/envoy ${BIN_DIR}/envoy.bak
   pushd ${TOP_DIR}
-  set -x
-  bazel build -c ${BUILD_TYPE} --disk_cache=${LOCAL_BUILD_CACHE} //:envoy
+  bazel build -c ${1} --disk_cache=${LOCAL_BUILD_CACHE} //:envoy
   popd
   cp ${TOP_DIR}/bazel-bin/envoy ${BIN_DIR}
 }
@@ -25,19 +24,14 @@ function do_test {
 }
 
 function do_clean {
-  bazel clean
+  bazel clean --disk_cache=${LOCAL_BUILD_CACHE}
 }
 
 mkdir -p ${LOCAL_BUILD_CACHE}
 mkdir -p ${BIN_DIR}
-while getopts release:test:dev:clean: flag
-do
-    case "${flag}" in
-        release) BUILD_TYPE="opt"; exit $(do_build);;
-        test) exit $(do_test);;
-        clean) exit $(do_clean);;
-    esac
-done
-
-# Catch-all will just run a dev build.
-do_build
+case "${1}" in
+  release) do_build opt;;
+  test) do_test;;
+  clean) do_clean;;
+  *) do_build dbg;;
+esac
