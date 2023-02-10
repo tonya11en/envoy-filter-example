@@ -17,37 +17,60 @@ Network::FilterStatus StreamCompressorFilter::onNewConnection() {
   //   * Dictionary.
   compression_ctx_ = ZSTD_createCCtx();
   if (compression_ctx_ == nullptr) {
-    ENVOY_CONN_LOG(error, "failed to create compression context, bypassing compression", read_callbacks_->connection());
-    bypass_ = true;
-    return Network::FilterStatus::Continue;
+    ENVOY_CONN_LOG(error, "failed to create compression context, closing connection", read_callbacks_->connection());
+    read_callbacks_->connection().close(Network::ConnectionCloseType::NoFlush);
+    return Network::FilterStatus::StopIteration;
   }
 
-  input_buf_.resize(ZSTD_CStreamInSize());
-  output_buf_.resize(ZSTD_CStreamOutSize());
+  decompression_ctx_ = ZSTD_createDCtx();
+  if (decompression_ctx_ == nullptr) {
+    ENVOY_CONN_LOG(error, "failed to create decompression context, closing connection", read_callbacks_->connection());
+    read_callbacks_->connection().close(Network::ConnectionCloseType::NoFlush);
+    return Network::FilterStatus::StopIteration;
+  }
+
+  encoder_output_buf_.resize(ZSTD_CStreamOutSize());
+  decoder_output_buf_.resize(ZSTD_DStreamOutSize());
+
+  // We'll also initialize the decoder state to its proper values.
+  decoder_zbuf_out_.dst = decoder_output_buf_.data();
+  decoder_zbuf_out_.size = decoder_output_buf_.size(); 
+  decoder_zbuf_out_.pos = 0;
+
   return Network::FilterStatus::Continue;
 }
 
-Network::FilterStatus StreamCompressorFilter::onData(Buffer::Instance& data, bool end_stream) {
-  if (stream_identification_ == StreamIdentification::UNIDENTIFIED) {
-      stream_identification_ = (hasMagicNumber(data) ? 
-          StreamIdentification::ZSTD_DECODE : StreamIdentification::ZSTD_ENCODE;
+Network::FilterStatus StreamCompressorFilter::onWrite(Buffer::Instance& data, bool end_stream) {
+  if (bypass_) {
+    return Network::FilterStatus::Continue;
   }
 
-  if stream_identification_ == StreamIdentification::ZSTD_ENCODE) {
+  maybeIdentifyStreamType(data);
+  if (stream_identification_ == StreamIdentification::ZSTD_ENCODE) {
+    // We do the opposite here because this function is handling _response_
+    // bytes. If we identified the stream as an encoder stream, the responses
+    // will be compressed and must be decoded.
+    return decodeStream(data, end_stream);
+  }
+  return encodeStream(data, end_stream);
+}
+
+Network::FilterStatus StreamCompressorFilter::onData(Buffer::Instance& data, bool end_stream) {
+  if (bypass_) {
+    return Network::FilterStatus::Continue;
+  }
+
+  maybeIdentifyStreamType(data);
+  if (stream_identification_ == StreamIdentification::ZSTD_ENCODE) {
     return encodeStream(data, end_stream);
   }
-
   return decodeStream(data, end_stream);
 }
 
+// ENCODE path.
 Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& data, bool end_stream) {
   ZSTD_inBuffer zbuf_in;
   ZSTD_outBuffer zbuf_out;
-
-  if (bypass_) {
-    read_callbacks_->connection().write(data, end_stream);
-    return Network::FilterStatus::Continue;
-  }
 
   // Iterate through the constituent slices of the data and feed them into the
   // compressor.
@@ -58,8 +81,8 @@ Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& dat
     zbuf_in.src = slice.mem_;
     zbuf_in.size = slice.len_; 
     zbuf_in.pos = 0;
-    zbuf_out.dst = output_buf_.data();
-    zbuf_out.size = output_buf_.size(); 
+    zbuf_out.dst = encoder_output_buf_.data();
+    zbuf_out.size = encoder_output_buf_.size(); 
     zbuf_out.pos = 0;
 
     ZSTD_EndDirective mode;
@@ -86,18 +109,70 @@ Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& dat
       }
     }
 
-    data.add(zbuf_out.dst, zbuf_out.pos);
+    const absl::string_view sv(static_cast<char*>(zbuf_out.dst), zbuf_out.pos);
+    data.add(std::move(sv));
   }
 
   // Discard the unneeded and uncompressed data, leaving only the compressed
   // bytes we want to write to the connection.
   data.drain(uncompressed_size);
-  read_callbacks_->connection().write(data, end_stream);
   return Network::FilterStatus::Continue;
 }
 
-Network::FilterStatus StreamCompressorFilter::decodeStream(Buffer::Instance& , bool ) {
+// DECODE path.
+Network::FilterStatus StreamCompressorFilter::decodeStream(Buffer::Instance& data, bool) {
+  ZSTD_inBuffer zbuf_in;
+
+  // Iterate through the constituent slices of the data and feed them into the
+  // decompressor.
+  const auto og_data_len = data.length();
+  for (const auto& slice : data.getRawSlices()) {
+    zbuf_in.src = slice.mem_;
+    zbuf_in.size = slice.len_; 
+    zbuf_in.pos = 0;
+
+    // If input position is < input size, some input has not been consumed from the data buffer.
+    while (zbuf_in.pos < zbuf_in.size) {
+      decoder_state_ = ZSTD_decompressStream(decompression_ctx_, &decoder_zbuf_out_, &zbuf_in);
+
+      if (ZSTD_isError(decoder_state_)) {
+        // There's no coming back from an error like this. Kill the connection.
+        ENVOY_CONN_LOG(error, "failed to decompress data with error {}", read_callbacks_->connection(), decoder_state_);
+        read_callbacks_->connection().close(Network::ConnectionCloseType::NoFlush);
+        return Network::FilterStatus::StopIteration;
+      }
+    }
+
+    if (decoder_state_ == 0) {
+      // A frame was completed, so it's safe to reset the decoder buffer state
+      // and flush output to the data buffer.
+      resetDecoderStateAndFlush(data);
+    }
+  }
+
+  data.drain(og_data_len);
   return Network::FilterStatus::Continue;
+}
+
+void StreamCompressorFilter::resetDecoderStateAndFlush(Buffer::Instance& data) {
+  // The decoder state must indicate that a frame was completed, otherwise we
+  // cannot do anything in this function.
+  ASSERT(decoder_state_ == 0);
+
+  // We also want to be sure that there is data to flush. A decoder state of 0
+  // here means that a frame was completed and flushed to the output buffer and
+  // frames can't be size 0, so something must have gone wrong if assertion
+  // fires.
+  ASSERT(decoder_zbuf_out_.pos > 0);
+
+  // Append the output zbuf into the data buffer.
+  const absl::string_view sv(static_cast<char*>(decoder_zbuf_out_.dst), decoder_zbuf_out_.pos);
+  data.add(std::move(sv));
+
+  // Reset the output buffer state.
+  decoder_zbuf_out_.dst = decoder_output_buf_.data();
+  decoder_zbuf_out_.size = decoder_output_buf_.size(); 
+  decoder_zbuf_out_.pos = 0;
 }
 
 } // namespace Filter
