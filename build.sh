@@ -27,6 +27,7 @@ function do_clean {
   bazel clean --disk_cache=${LOCAL_BUILD_CACHE}
 }
 
+git config --global --add safe.directory /src
 mkdir -p ${LOCAL_BUILD_CACHE}
 mkdir -p ${BIN_DIR}
 case "${1}" in

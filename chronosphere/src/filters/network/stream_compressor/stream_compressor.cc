@@ -11,6 +11,10 @@ namespace Envoy {
 namespace Filter {
 
 Network::FilterStatus StreamCompressorFilter::onNewConnection() {
+  // TODO(tallen): 
+  // Allow configurable stream parameters in filter config such as:
+  //   * Compression level.
+  //   * Dictionary.
   compression_ctx_ = ZSTD_createCCtx();
   if (compression_ctx_ == nullptr) {
     ENVOY_CONN_LOG(error, "failed to create compression context, bypassing compression", read_callbacks_->connection());
@@ -24,6 +28,19 @@ Network::FilterStatus StreamCompressorFilter::onNewConnection() {
 }
 
 Network::FilterStatus StreamCompressorFilter::onData(Buffer::Instance& data, bool end_stream) {
+  if (stream_identification_ == StreamIdentification::UNIDENTIFIED) {
+      stream_identification_ = (hasMagicNumber(data) ? 
+          StreamIdentification::ZSTD_DECODE : StreamIdentification::ZSTD_ENCODE;
+  }
+
+  if stream_identification_ == StreamIdentification::ZSTD_ENCODE) {
+    return encodeStream(data, end_stream);
+  }
+
+  return decodeStream(data, end_stream);
+}
+
+Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& data, bool end_stream) {
   ZSTD_inBuffer zbuf_in;
   ZSTD_outBuffer zbuf_out;
 
@@ -79,8 +96,7 @@ Network::FilterStatus StreamCompressorFilter::onData(Buffer::Instance& data, boo
   return Network::FilterStatus::Continue;
 }
 
-Network::FilterStatus StreamCompressorFilter::onWrite(Buffer::Instance& , bool) {
-  // TODO tallen
+Network::FilterStatus StreamCompressorFilter::decodeStream(Buffer::Instance& , bool ) {
   return Network::FilterStatus::Continue;
 }
 
