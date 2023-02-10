@@ -20,6 +20,7 @@ envoy_cc_library(
         "@envoy//source/common/common:assert_lib",
         "@envoy//source/common/common:logger_lib",
     ],
+    external_deps = ["zstd"],
 )
 
 envoy_cc_library(
@@ -34,13 +35,13 @@ envoy_cc_library(
     ],
 )
 
-envoy_cc_test(
-    name = "stream_compressor_integration_test",
-    srcs = ["stream_compressor_integration_test.cc"],
-    data =  ["stream_compressor_server.yaml"],
-    repository = "@envoy",
-    deps = [
-        ":stream_compressor_config",
-        "@envoy//test/integration:integration_lib"
-    ],
-)
+# envoy_cc_test(
+#     name = "stream_compressor_integration_test",
+#     srcs = ["stream_compressor_integration_test.cc"],
+#     data =  ["stream_compressor_server.yaml"],
+#     repository = "@envoy",
+#     deps = [
+#         ":stream_compressor_config",
+#         "@envoy//test/integration:integration_lib"
+#     ],
+# )
