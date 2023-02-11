@@ -18,8 +18,6 @@ class StreamCompressorFilter : public Network::ReadFilter,
                                public Network::WriteFilter,
                                Logger::Loggable<Logger::Id::filter> {
  public:
-  StreamCompressorFilter();
-
   ~StreamCompressorFilter() { 
     if (compression_ctx_ != nullptr) {
       ZSTD_freeCCtx(compression_ctx_); 
@@ -40,9 +38,19 @@ class StreamCompressorFilter : public Network::ReadFilter,
   // Network::WriteFilter
   Network::FilterStatus onWrite(Buffer::Instance& data, bool end_stream) override;
 
+ protected:
+  struct UpstreamCallbacks : public Tcp::ConnectionPool::UpstreamCallbacks {
+    UpstreamCallbacks(Filter* parent) : parent_(parent) {}
+
+    // Tcp::ConnectionPool::UpstreamCallbacks
+    void onUpstreamData(Buffer::Instance& data, bool end_stream) override;
+  };
+
   Network::FilterStatus encodeStream(Buffer::Instance& data, bool end_stream);
   Network::FilterStatus decodeStream(Buffer::Instance& data, bool end_stream);
 
+  std::shared_ptr<UpstreamCallbacks> upstream_callbacks_; // shared_ptr required for passing as a
+                                                          // read filter.
  private:
   // Stores decoder state for this stream. Since we have no control over the
   // zstd frames in the decode stream, we'll need to maintain state across the

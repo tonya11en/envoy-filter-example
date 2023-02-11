@@ -25,7 +25,7 @@ public:
     return ProtobufTypes::MessagePtr{new Envoy::ProtobufWkt::Struct()};
   }
 
-  std::string name() const override { return "stream_compressor"; }
+  std::string name() const override { return "chronosphere.stream_compressor"; }
 
   bool isTerminalFilterByProto(const Protobuf::Message&, ServerFactoryContext&) override { return true; }
 };

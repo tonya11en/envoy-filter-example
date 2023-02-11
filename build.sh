@@ -5,7 +5,6 @@ set -x
 TOP_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 LOCAL_BUILD_CACHE="${TOP_DIR}/.cache"
 BIN_DIR="${TOP_DIR}/bin"
-BUILD_TYPE="dbg"
 
 function do_build {
   echo "Starting envoy binary build and backing up previous binary..."
@@ -28,11 +27,13 @@ function do_clean {
 }
 
 git config --global --add safe.directory /src
+
 mkdir -p ${LOCAL_BUILD_CACHE}
 mkdir -p ${BIN_DIR}
 case "${1}" in
   release) do_build opt;;
+  debug) do_build dbg;;
   test) do_test;;
   clean) do_clean;;
-  *) do_build dbg;;
+  *) do_build fastbuild;;
 esac

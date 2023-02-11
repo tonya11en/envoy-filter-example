@@ -5,6 +5,7 @@
 
 #include "source/common/common/assert.h"
 
+#include "absl/strings/string_view.h"
 #include "zstd.h"
 
 namespace Envoy {
@@ -41,6 +42,7 @@ Network::FilterStatus StreamCompressorFilter::onNewConnection() {
 }
 
 Network::FilterStatus StreamCompressorFilter::onWrite(Buffer::Instance& data, bool end_stream) {
+  ENVOY_CONN_LOG(info, "@tallen onWrite", read_callbacks_->connection());
   if (bypass_) {
     return Network::FilterStatus::Continue;
   }
@@ -69,6 +71,8 @@ Network::FilterStatus StreamCompressorFilter::onData(Buffer::Instance& data, boo
 
 // ENCODE path.
 Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& data, bool end_stream) {
+  ENVOY_CONN_LOG(info, "@tallen encoding stream data {}", read_callbacks_->connection(), data.toString());
+
   ZSTD_inBuffer zbuf_in;
   ZSTD_outBuffer zbuf_out;
 
@@ -121,6 +125,7 @@ Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& dat
 
 // DECODE path.
 Network::FilterStatus StreamCompressorFilter::decodeStream(Buffer::Instance& data, bool) {
+  ENVOY_CONN_LOG(info, "@tallen decoding stream data {}", read_callbacks_->connection(), data.toString());
   ZSTD_inBuffer zbuf_in;
 
   // Iterate through the constituent slices of the data and feed them into the
@@ -167,6 +172,7 @@ void StreamCompressorFilter::resetDecoderStateAndFlush(Buffer::Instance& data) {
 
   // Append the output zbuf into the data buffer.
   const absl::string_view sv(static_cast<char*>(decoder_zbuf_out_.dst), decoder_zbuf_out_.pos);
+  ENVOY_CONN_LOG(info, "@tallen resetting and flushing bytes {}", read_callbacks_->connection(), sv);
   data.add(std::move(sv));
 
   // Reset the output buffer state.
