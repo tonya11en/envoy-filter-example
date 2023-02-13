@@ -4,12 +4,25 @@
 
 #include "envoy/network/filter.h"
 #include "source/common/common/logger.h"
+#include "envoy/stats/stats_macros.h"
+#include "envoy/stats/scope.h"
+#include "envoy/stats/stats.h"
+
 
 #include "absl/strings/string_view.h"
 #include "zstd.h"
 
 namespace Envoy {
 namespace Filter {
+
+#define ALL_STREAM_COMPRESSOR_STATS(COUNTER) \
+  COUNTER(encoded_bytes) \
+  COUNTER(decoded_bytes) \
+  COUNTER(cx_total)
+
+struct StreamCompressorStats {
+  ALL_STREAM_COMPRESSOR_STATS(GENERATE_COUNTER_STRUCT)
+};
 
 /**
  * Implementation of the zstd stream compressor filter.
@@ -18,6 +31,8 @@ class StreamCompressorFilter : public Network::ReadFilter,
                                public Network::WriteFilter,
                                Logger::Loggable<Logger::Id::filter> {
  public:
+  StreamCompressorFilter(Stats::Scope& scope);
+
   ~StreamCompressorFilter() { 
     if (compression_ctx_ != nullptr) {
       ZSTD_freeCCtx(compression_ctx_); 
@@ -49,12 +64,12 @@ class StreamCompressorFilter : public Network::ReadFilter,
   // indicating the start of a frame. We'll use this to determine what to do
   // with a particular stream.
   bool hasMagicNumber(Buffer::Instance& data) const {
-    static constexpr std::array<char, 4> mn = {
-      static_cast<char>(0xFD), 
-      static_cast<char>(0x2F), 
+    static constexpr std::array<char, 4> magic = {
+      static_cast<char>(0x28),
       static_cast<char>(0xB5), 
-      static_cast<char>(0x28)};
-    static absl::string_view zstdMagicNumber(mn.data(), 4);
+      static_cast<char>(0x2F), 
+      static_cast<char>(0xFD)}; 
+    static absl::string_view zstdMagicNumber(magic.data(), 4);
     return data.startsWith(zstdMagicNumber);
   }
 
@@ -91,6 +106,8 @@ class StreamCompressorFilter : public Network::ReadFilter,
   void resetDecoderStateAndFlush(Buffer::Instance& data);
 
  private:
+  StreamCompressorStats generateStats(Stats::Scope& scope);
+
   StreamIdentification stream_identification_{StreamIdentification::UNSET};
 
   Network::ReadFilterCallbacks* read_callbacks_{};
@@ -103,6 +120,8 @@ class StreamCompressorFilter : public Network::ReadFilter,
 
   // TODO: set this via config
   bool bypass_{false};
+
+  StreamCompressorStats stats_;
 };
 
 } // namespace Filter

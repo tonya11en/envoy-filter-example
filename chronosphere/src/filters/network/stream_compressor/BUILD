@@ -11,7 +11,8 @@ envoy_cc_library(
     hdrs = ["stream_compressor.h"],
     repository = "@envoy",
     deps = [
-        "@envoy//envoy/buffer:buffer_interface",
+        "@envoy//envoy/stats:stats_macros",
+        "@envoy//envoy/stats:stats_interface",
         "@envoy//envoy/network:connection_interface",
         "@envoy//envoy/network:filter_interface",
         "@envoy//source/common/common:assert_lib",

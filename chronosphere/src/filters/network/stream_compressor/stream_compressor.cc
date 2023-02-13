@@ -11,7 +11,17 @@
 namespace Envoy {
 namespace Filter {
 
+StreamCompressorFilter::StreamCompressorFilter(Stats::Scope& scope) :
+  stats_(generateStats(scope)) {}
+
+StreamCompressorStats StreamCompressorFilter::generateStats(Stats::Scope& scope) {
+  const std::string prefix = "stream_compressor.";
+  return {ALL_STREAM_COMPRESSOR_STATS(POOL_COUNTER_PREFIX(scope, prefix))};
+}
+
 Network::FilterStatus StreamCompressorFilter::onNewConnection() {
+  stats_.cx_total_.inc();
+
   // TODO(tallen): 
   // Allow configurable stream parameters in filter config such as:
   //   * Compression level.
@@ -83,6 +93,8 @@ Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& dat
   ZSTD_inBuffer zbuf_in;
   ZSTD_outBuffer zbuf_out;
 
+  stats_.encoded_bytes_.add(data.length());
+
   // Iterate through the constituent slices of the data and feed them into the
   // compressor.
   const auto uncompressed_size = data.length();
@@ -134,6 +146,8 @@ Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& dat
 Network::FilterStatus StreamCompressorFilter::decodeStream(Buffer::Instance& data, bool) {
   ENVOY_CONN_LOG(info, "@tallen decoding stream data {}", read_callbacks_->connection(), data.toString());
   ZSTD_inBuffer zbuf_in;
+
+  stats_.decoded_bytes_.add(data.length());
 
   // Iterate through the constituent slices of the data and feed them into the
   // decompressor.

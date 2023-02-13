@@ -15,10 +15,10 @@ namespace Configuration {
 class StreamCompressorConfigFactory : public NamedNetworkFilterConfigFactory {
 public:
   Network::FilterFactoryCb createFilterFactoryFromProto(const Protobuf::Message&,
-                                                        FactoryContext&) override {
-    return [](Network::FilterManager& filter_manager) -> void {
+                                                        FactoryContext& ctx) override {
+    return [&ctx](Network::FilterManager& filter_manager) -> void {
       filter_manager.addReadFilter(Network::ReadFilterSharedPtr{
-          new Filter::StreamCompressorFilter()});
+          new Filter::StreamCompressorFilter(ctx.scope())});
     };
   }
 

@@ -8,7 +8,7 @@ BIN_DIR="${TOP_DIR}/bin"
 
 function do_build {
   echo "Starting envoy binary build and backing up previous binary..."
-  mv ${BIN_DIR}/envoy ${BIN_DIR}/envoy.bak
+  cp ${BIN_DIR}/envoy ${BIN_DIR}/envoy.bak
   pushd ${TOP_DIR}
   bazel build -c ${1} --disk_cache=${LOCAL_BUILD_CACHE} //:envoy
   popd
