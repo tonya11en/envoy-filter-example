@@ -2,16 +2,8 @@ package(default_visibility = ["//visibility:public"])
 
 load(
     "@envoy//bazel:envoy_build_system.bzl",
-    "envoy_cc_binary",
     "envoy_cc_library",
     "envoy_cc_test")
-#load(
-#    "@envoy_api//bazel:api_build_system.bzl",
-#    "api_proto_package",
-#)
-
-
-#api_proto_package()
 
 envoy_cc_library(
     name = "stream_compressor_lib",
@@ -19,7 +11,6 @@ envoy_cc_library(
     hdrs = ["stream_compressor.h"],
     repository = "@envoy",
     deps = [
-#        ":pkg_cc_proto",
         "@envoy//envoy/buffer:buffer_interface",
         "@envoy//envoy/network:connection_interface",
         "@envoy//envoy/network:filter_interface",
@@ -31,7 +22,7 @@ envoy_cc_library(
 
 envoy_cc_library(
     name = "stream_compressor_config",
-    srcs = ["stream_compressor_config.cc"],
+    srcs = ["config.cc"],
     repository = "@envoy",
     deps = [
         ":stream_compressor_lib",

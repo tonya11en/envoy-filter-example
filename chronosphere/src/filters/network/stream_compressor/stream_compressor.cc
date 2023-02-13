@@ -49,11 +49,15 @@ Network::FilterStatus StreamCompressorFilter::onWrite(Buffer::Instance& data, bo
 
   maybeIdentifyStreamType(data);
   if (stream_identification_ == StreamIdentification::ZSTD_ENCODE) {
+    ENVOY_CONN_LOG(info, "@tallen onWrite: stream identified as ENCODE stream", read_callbacks_->connection());
     // We do the opposite here because this function is handling _response_
-    // bytes. If we identified the stream as an encoder stream, the responses
-    // will be compressed and must be decoded.
+    // bytes. If we identified the stream as an encoder stream, meaning we
+    // compress the data on the way to its upstream target, the responses will
+    // be compressed and must be decoded.
     return decodeStream(data, end_stream);
   }
+
+  ENVOY_CONN_LOG(info, "@tallen onWrite: stream identified as DECODE stream", read_callbacks_->connection());
   return encodeStream(data, end_stream);
 }
 
@@ -64,14 +68,17 @@ Network::FilterStatus StreamCompressorFilter::onData(Buffer::Instance& data, boo
 
   maybeIdentifyStreamType(data);
   if (stream_identification_ == StreamIdentification::ZSTD_ENCODE) {
+    ENVOY_CONN_LOG(info, "@tallen onData: stream identified as ENCODE stream", read_callbacks_->connection());
     return encodeStream(data, end_stream);
   }
+
+  ENVOY_CONN_LOG(info, "@tallen onData: stream identified as DECODE stream", read_callbacks_->connection());
   return decodeStream(data, end_stream);
 }
 
 // ENCODE path.
 Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& data, bool end_stream) {
-  ENVOY_CONN_LOG(info, "@tallen encoding stream data {}", read_callbacks_->connection(), data.toString());
+  ENVOY_CONN_LOG(info, "@tallen encoding stream data (endstream={}): {}", read_callbacks_->connection(), end_stream, data.toString());
 
   ZSTD_inBuffer zbuf_in;
   ZSTD_outBuffer zbuf_out;
@@ -114,7 +121,7 @@ Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& dat
     }
 
     const absl::string_view sv(static_cast<char*>(zbuf_out.dst), zbuf_out.pos);
-    data.add(std::move(sv));
+    data.add(sv);
   }
 
   // Discard the unneeded and uncompressed data, leaving only the compressed
@@ -173,7 +180,7 @@ void StreamCompressorFilter::resetDecoderStateAndFlush(Buffer::Instance& data) {
   // Append the output zbuf into the data buffer.
   const absl::string_view sv(static_cast<char*>(decoder_zbuf_out_.dst), decoder_zbuf_out_.pos);
   ENVOY_CONN_LOG(info, "@tallen resetting and flushing bytes {}", read_callbacks_->connection(), sv);
-  data.add(std::move(sv));
+  data.add(sv);
 
   // Reset the output buffer state.
   decoder_zbuf_out_.dst = decoder_output_buf_.data();

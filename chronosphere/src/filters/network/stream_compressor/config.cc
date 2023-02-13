@@ -17,7 +17,8 @@ public:
   Network::FilterFactoryCb createFilterFactoryFromProto(const Protobuf::Message&,
                                                         FactoryContext&) override {
     return [](Network::FilterManager& filter_manager) -> void {
-      filter_manager.addReadFilter(Network::ReadFilterSharedPtr{new Filter::StreamCompressorFilter()});
+      filter_manager.addReadFilter(Network::ReadFilterSharedPtr{
+          new Filter::StreamCompressorFilter()});
     };
   }
 
@@ -26,8 +27,6 @@ public:
   }
 
   std::string name() const override { return "chronosphere.stream_compressor"; }
-
-  bool isTerminalFilterByProto(const Protobuf::Message&, ServerFactoryContext&) override { return true; }
 };
 
 /**
