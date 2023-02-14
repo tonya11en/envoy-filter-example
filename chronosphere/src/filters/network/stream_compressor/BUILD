@@ -33,6 +33,15 @@ envoy_cc_library(
     ],
 )
 
+envoy_cc_test(
+    name = "stream_compressor_test",
+    srcs = ["stream_compressor_test.cc"],
+    repository = "@envoy",
+    deps = [
+        ":stream_compressor_config",
+    ],
+)
+
 # envoy_cc_test(
 #     name = "stream_compressor_integration_test",
 #     srcs = ["stream_compressor_integration_test.cc"],

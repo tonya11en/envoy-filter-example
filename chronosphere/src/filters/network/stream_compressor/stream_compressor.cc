@@ -20,8 +20,6 @@ StreamCompressorStats StreamCompressorFilter::generateStats(Stats::Scope& scope)
 }
 
 Network::FilterStatus StreamCompressorFilter::onNewConnection() {
-  stats_.cx_total_.inc();
-
   // TODO(tallen): 
   // Allow configurable stream parameters in filter config such as:
   //   * Compression level.
@@ -59,7 +57,6 @@ Network::FilterStatus StreamCompressorFilter::onWrite(Buffer::Instance& data, bo
 
   maybeIdentifyStreamType(data);
   if (stream_identification_ == StreamIdentification::ZSTD_ENCODE) {
-    ENVOY_CONN_LOG(info, "@tallen onWrite: stream identified as ENCODE stream", read_callbacks_->connection());
     // We do the opposite here because this function is handling _response_
     // bytes. If we identified the stream as an encoder stream, meaning we
     // compress the data on the way to its upstream target, the responses will
@@ -67,7 +64,6 @@ Network::FilterStatus StreamCompressorFilter::onWrite(Buffer::Instance& data, bo
     return decodeStream(data, end_stream);
   }
 
-  ENVOY_CONN_LOG(info, "@tallen onWrite: stream identified as DECODE stream", read_callbacks_->connection());
   return encodeStream(data, end_stream);
 }
 
@@ -78,18 +74,14 @@ Network::FilterStatus StreamCompressorFilter::onData(Buffer::Instance& data, boo
 
   maybeIdentifyStreamType(data);
   if (stream_identification_ == StreamIdentification::ZSTD_ENCODE) {
-    ENVOY_CONN_LOG(info, "@tallen onData: stream identified as ENCODE stream", read_callbacks_->connection());
     return encodeStream(data, end_stream);
   }
 
-  ENVOY_CONN_LOG(info, "@tallen onData: stream identified as DECODE stream", read_callbacks_->connection());
   return decodeStream(data, end_stream);
 }
 
 // ENCODE path.
 Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& data, bool end_stream) {
-  ENVOY_CONN_LOG(info, "@tallen encoding stream data (endstream={}): {}", read_callbacks_->connection(), end_stream, data.toString());
-
   ZSTD_inBuffer zbuf_in;
   ZSTD_outBuffer zbuf_out;
 
@@ -110,30 +102,34 @@ Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& dat
 
     ZSTD_EndDirective mode;
     const bool last_slice = (i == raw_slices.size() - 1);
-    while (zbuf_in.pos != zbuf_in.size) {
-      if (last_slice) {
-        // Since there are no more slices, we want to conclude the block.
-        // However, if the data stream is not concluded, we don't want to end
-        // the zstd stream, so we want to use `ZSTD_e_flush` in that case.
-        // Doing so will allow future data to reference previously compressed
-        // data and improve the compression ratio, whereas `ZSTD_e_end` will
-        // reset the context.
-        mode = end_stream ? ZSTD_e_end : ZSTD_e_flush;
-      } else {
-        mode = ZSTD_e_continue;
-      }
-
-      auto remaining = ZSTD_compressStream2(compression_ctx_, &zbuf_out, &zbuf_in, mode);
-      if (ZSTD_isError(remaining)) {
-        // There's no coming back from an error like this. Kill the connection.
-        ENVOY_CONN_LOG(error, "failed to compress data with error {}", read_callbacks_->connection(), remaining);
-        read_callbacks_->connection().close(Network::ConnectionCloseType::NoFlush);
-        return Network::FilterStatus::StopIteration;
-      }
+    if (last_slice) {
+      // Since there are no more slices, we want to conclude the block.
+      // However, if the data stream is not concluded, we don't want to end
+      // the zstd stream, so we want to use `ZSTD_e_flush` in that case.
+      // Doing so will allow future data to reference previously compressed
+      // data and improve the compression ratio, whereas `ZSTD_e_end` will
+      // reset the context.
+      mode = end_stream ? ZSTD_e_end : ZSTD_e_flush;
+    } else {
+      mode = ZSTD_e_continue;
     }
 
-    const absl::string_view sv(static_cast<char*>(zbuf_out.dst), zbuf_out.pos);
-    data.add(sv);
+    size_t ret;
+    while (zbuf_in.pos < zbuf_in.size && ret != 0) {
+      ret = ZSTD_compressStream2(compression_ctx_, &zbuf_out, &zbuf_in, mode);
+      const bool frame_complete = (ret == 0);
+      if (ZSTD_isError(ret)) {
+        // There's no coming back from an error like this. Kill the connection.
+        ENVOY_CONN_LOG(error, "failed to compress data with error {}", read_callbacks_->connection(), ret);
+        read_callbacks_->connection().close(Network::ConnectionCloseType::NoFlush);
+        return Network::FilterStatus::StopIteration;
+      } else if (frame_complete) {
+        // Flush to the data buffer and reset the output zbuf.
+        absl::string_view sv(static_cast<char*>(zbuf_out.dst), zbuf_out.pos);
+        data.add(sv);
+        zbuf_out.pos = 0;
+      }
+    }
   }
 
   // Discard the unneeded and uncompressed data, leaving only the compressed
@@ -143,8 +139,7 @@ Network::FilterStatus StreamCompressorFilter::encodeStream(Buffer::Instance& dat
 }
 
 // DECODE path.
-Network::FilterStatus StreamCompressorFilter::decodeStream(Buffer::Instance& data, bool) {
-  ENVOY_CONN_LOG(info, "@tallen decoding stream data {}", read_callbacks_->connection(), data.toString());
+Network::FilterStatus StreamCompressorFilter::decodeStream(Buffer::Instance& data, bool end_stream) {
   ZSTD_inBuffer zbuf_in;
 
   stats_.decoded_bytes_.add(data.length());
@@ -160,6 +155,8 @@ Network::FilterStatus StreamCompressorFilter::decodeStream(Buffer::Instance& dat
     // If input position is < input size, some input has not been consumed from the data buffer.
     while (zbuf_in.pos < zbuf_in.size) {
       decoder_state_ = ZSTD_decompressStream(decompression_ctx_, &decoder_zbuf_out_, &zbuf_in);
+      ENVOY_CONN_LOG(info, "@tallen  zbuf_in.pos={}, zbuf_in.size={}, decoder_state={}", 
+          read_callbacks_->connection(), zbuf_in.pos, zbuf_in.size, decoder_state_);
 
       if (ZSTD_isError(decoder_state_)) {
         // There's no coming back from an error like this. Kill the connection.
@@ -168,32 +165,28 @@ Network::FilterStatus StreamCompressorFilter::decodeStream(Buffer::Instance& dat
         return Network::FilterStatus::StopIteration;
       }
     }
-
-    if (decoder_state_ == 0) {
-      // A frame was completed, so it's safe to reset the decoder buffer state
-      // and flush output to the data buffer.
-      resetDecoderStateAndFlush(data);
-    }
   }
 
+  if (decoder_state_ != 0 && end_stream) {
+    stats_.incomplete_frame_.inc();
+  }
+
+  resetDecoderStateAndFlush(data);
   data.drain(og_data_len);
+
   return Network::FilterStatus::Continue;
 }
 
 void StreamCompressorFilter::resetDecoderStateAndFlush(Buffer::Instance& data) {
-  // The decoder state must indicate that a frame was completed, otherwise we
-  // cannot do anything in this function.
-  ASSERT(decoder_state_ == 0);
+  ENVOY_CONN_LOG(info, "@tallen resetting decoder state and flushing", read_callbacks_->connection());
 
-  // We also want to be sure that there is data to flush. A decoder state of 0
-  // here means that a frame was completed and flushed to the output buffer and
-  // frames can't be size 0, so something must have gone wrong if assertion
-  // fires.
-  ASSERT(decoder_zbuf_out_.pos > 0);
+  if (decoder_zbuf_out_.pos == 0) {
+    // Nothing to flush.
+    return;
+  }
 
   // Append the output zbuf into the data buffer.
   const absl::string_view sv(static_cast<char*>(decoder_zbuf_out_.dst), decoder_zbuf_out_.pos);
-  ENVOY_CONN_LOG(info, "@tallen resetting and flushing bytes {}", read_callbacks_->connection(), sv);
   data.add(sv);
 
   // Reset the output buffer state.

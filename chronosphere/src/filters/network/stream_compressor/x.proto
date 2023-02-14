@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package stream_compressor;
+
+import "validate/validate.proto";
+
+message StreamCompressorConfig {
+  // If false, the filter will act as a passthrough.
+  bool enabled = 1;
+
+  // Whether the filter is meant to compress or decompress the TCP stream.
+  CompressionAction action = 2 [(validate.rules).enum = {defined_only: true}];
+}
+
+enum CompressionAction {
+  COMPRESS = 0;
+  DECOMPRESS = 1;
+}

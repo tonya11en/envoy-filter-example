@@ -17,7 +17,7 @@ public:
   Network::FilterFactoryCb createFilterFactoryFromProto(const Protobuf::Message&,
                                                         FactoryContext& ctx) override {
     return [&ctx](Network::FilterManager& filter_manager) -> void {
-      filter_manager.addReadFilter(Network::ReadFilterSharedPtr{
+      filter_manager.addFilter(Network::FilterSharedPtr{
           new Filter::StreamCompressorFilter(ctx.scope())});
     };
   }

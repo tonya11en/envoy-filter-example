@@ -12,6 +12,7 @@ function do_build {
   pushd ${TOP_DIR}
   bazel build -c ${1} --disk_cache=${LOCAL_BUILD_CACHE} //:envoy
   popd
+  rm ${BIN_DIR}/envoy
   cp ${TOP_DIR}/bazel-bin/envoy ${BIN_DIR}
 }
 

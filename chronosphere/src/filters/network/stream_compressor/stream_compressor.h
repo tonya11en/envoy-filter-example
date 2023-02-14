@@ -18,7 +18,9 @@ namespace Filter {
 #define ALL_STREAM_COMPRESSOR_STATS(COUNTER) \
   COUNTER(encoded_bytes) \
   COUNTER(decoded_bytes) \
-  COUNTER(cx_total)
+  COUNTER(incomplete_frame) \
+  COUNTER(encode_stream_total) \
+  COUNTER(decode_stream_total)
 
 struct StreamCompressorStats {
   ALL_STREAM_COMPRESSOR_STATS(GENERATE_COUNTER_STRUCT)
@@ -27,8 +29,7 @@ struct StreamCompressorStats {
 /**
  * Implementation of the zstd stream compressor filter.
  */
-class StreamCompressorFilter : public Network::ReadFilter, 
-                               public Network::WriteFilter,
+class StreamCompressorFilter : public Network::Filter, 
                                Logger::Loggable<Logger::Id::filter> {
  public:
   StreamCompressorFilter(Stats::Scope& scope);
@@ -43,14 +44,15 @@ class StreamCompressorFilter : public Network::ReadFilter,
     }
   }
 
-  // Network::ReadFilter
+  // Network::Filter
   Network::FilterStatus onData(Buffer::Instance& data, bool end_stream) override;
   Network::FilterStatus onNewConnection() override;
   void initializeReadFilterCallbacks(Network::ReadFilterCallbacks& callbacks) override {
     read_callbacks_ = &callbacks;
   }
-
-  // Network::WriteFilter
+  void initializeWriteFilterCallbacks(Network::WriteFilterCallbacks& callbacks) override {
+    write_callbacks_ = &callbacks;
+  }
   Network::FilterStatus onWrite(Buffer::Instance& data, bool end_stream) override;
 
  protected:
@@ -77,8 +79,13 @@ class StreamCompressorFilter : public Network::ReadFilter,
     if (stream_identification_ == StreamIdentification::UNSET) {
       // Classify the stream. If the magic number exists in the first 4 bytes, we
       // will decode anything coming into this stream.
-        stream_identification_ = hasMagicNumber(data) ? 
-            StreamIdentification::ZSTD_DECODE : StreamIdentification::ZSTD_ENCODE;
+        if (hasMagicNumber(data)) {
+          stats_.decode_stream_total_.inc();
+          stream_identification_ =  StreamIdentification::ZSTD_DECODE;
+        } else {
+          stats_.encode_stream_total_.inc();
+          stream_identification_ = StreamIdentification::ZSTD_ENCODE;
+        }
     }
   }
 
@@ -111,6 +118,7 @@ class StreamCompressorFilter : public Network::ReadFilter,
   StreamIdentification stream_identification_{StreamIdentification::UNSET};
 
   Network::ReadFilterCallbacks* read_callbacks_{};
+  Network::WriteFilterCallbacks* write_callbacks_{};
 
   ZSTD_CCtx* compression_ctx_;
   ZSTD_DCtx* decompression_ctx_;
