@@ -18,9 +18,9 @@ namespace Filter {
 #define ALL_STREAM_COMPRESSOR_STATS(COUNTER) \
   COUNTER(encoded_bytes) \
   COUNTER(decoded_bytes) \
-  COUNTER(incomplete_frame) \
-  COUNTER(encode_stream_total) \
-  COUNTER(decode_stream_total)
+  COUNTER(decoder_stream_flush) \
+  COUNTER(encoder_stream_total) \
+  COUNTER(decoder_stream_total)
 
 struct StreamCompressorStats {
   ALL_STREAM_COMPRESSOR_STATS(GENERATE_COUNTER_STRUCT)
@@ -80,10 +80,10 @@ class StreamCompressorFilter : public Network::Filter,
       // Classify the stream. If the magic number exists in the first 4 bytes, we
       // will decode anything coming into this stream.
         if (hasMagicNumber(data)) {
-          stats_.decode_stream_total_.inc();
+          stats_.decoder_stream_total_.inc();
           stream_identification_ =  StreamIdentification::ZSTD_DECODE;
         } else {
-          stats_.encode_stream_total_.inc();
+          stats_.encoder_stream_total_.inc();
           stream_identification_ = StreamIdentification::ZSTD_ENCODE;
         }
     }
@@ -110,7 +110,9 @@ class StreamCompressorFilter : public Network::Filter,
   ZSTD_outBuffer decoder_zbuf_out_;
   size_t decoder_state_{0};
 
-  void resetDecoderStateAndFlush(Buffer::Instance& data);
+  void maybeFlushData(Buffer::Instance& data);
+  size_t doCompress( Buffer::Instance& data, ZSTD_inBuffer& zbuf_in, ZSTD_outBuffer& zbuf_out, ZSTD_EndDirective mode);
+  void doDecompress(Buffer::Instance& data, ZSTD_inBuffer& zbuf_in);
 
  private:
   StreamCompressorStats generateStats(Stats::Scope& scope);
