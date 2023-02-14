@@ -50,7 +50,6 @@ Network::FilterStatus StreamCompressorFilter::onNewConnection() {
 }
 
 Network::FilterStatus StreamCompressorFilter::onWrite(Buffer::Instance& data, bool end_stream) {
-  ENVOY_CONN_LOG(info, "@tallen onWrite", read_callbacks_->connection());
   if (bypass_) {
     return Network::FilterStatus::Continue;
   }
